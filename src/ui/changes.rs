@@ -12,6 +12,10 @@ use crate::ui::app::{App, Element, Message, MenuKind, Pane, Selection};
 use crate::ui::vsplit;
 use crate::ui::widgets::{self, primary_button, row_button, small_button};
 
+/// Tallest the commit body gets in the detail view, about ten lines; longer
+/// bodies scroll.
+const BODY_MAX_H: f32 = 180.0;
+
 pub fn view(app: &App) -> Element<'_> {
     match app.selection {
         Selection::WorkingTree => worktree(app),
@@ -266,24 +270,28 @@ fn commit(app: &App, idx: usize) -> Element<'_> {
     col = col.push(text(&c.summary).size(14).color(t.strong));
     if !c.body.is_empty() {
         // A read-only editor: the body can be selected with the mouse or
-        // Ctrl+A and copied with Ctrl+C; edits are dropped in App.
+        // Ctrl+A and copied with Ctrl+C; edits are dropped in App. A long
+        // body scrolls inside BODY_MAX_H so the file list keeps its room.
         col = col.push(
-            scrollable(
-                container(
-                    iced_widget::TextEditor::new(&app.detail_body)
-                        .on_action(Message::DetailAction)
-                        .size(12)
-                        .font(Font::MONOSPACE)
-                        .padding(2)
-                        .height(Length::Shrink)
-                        .wrapping(iced_core::text::Wrapping::Word)
-                        .style(widgets::text_readonly_style),
+            container(
+                scrollable(
+                    container(
+                        iced_widget::TextEditor::new(&app.detail_body)
+                            .on_action(Message::DetailAction)
+                            .size(12)
+                            .font(Font::MONOSPACE)
+                            .padding(2)
+                            .height(Length::Shrink)
+                            .wrapping(iced_core::text::Wrapping::Word)
+                            .style(widgets::text_readonly_style),
+                    )
+                    .padding([4, 0]),
                 )
-                .padding([4, 0]),
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .spacing(2),
             )
-            .width(Length::Fill)
-            .height(Length::Shrink)
-            .spacing(2),
+            .max_height(BODY_MAX_H),
         );
     }
     let files = app.commit_files.get(&c.oid);
