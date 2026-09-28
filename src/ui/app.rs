@@ -764,7 +764,7 @@ impl App {
             grid_bounds: Cell::new(iced_core::Rectangle::default()),
             editor_panes,
             editor_full: false,
-            log_columns: (110.0, 44.0),
+            log_columns: (110.0, log::DATE_W),
             changes_split: DEFAULT_CHANGES_SPLIT,
             zoom: 1.0,
             last_result: None,
@@ -3296,22 +3296,25 @@ pub fn list_subfolders(dir: &Path) -> Vec<(String, bool)> {
     out
 }
 
-/// Human readable age like "3m", "2h", "5d", "3mo", "2y".
-pub fn age(now: i64, then: i64) -> String {
-    let d = (now - then).max(0);
-    if d < 60 {
-        format!("{d}s")
-    } else if d < 3600 {
-        format!("{}m", d / 60)
-    } else if d < 86400 {
-        format!("{}h", d / 3600)
-    } else if d < 86400 * 30 {
-        format!("{}d", d / 86400)
-    } else if d < 86400 * 365 {
-        format!("{}mo", d / (86400 * 30))
-    } else {
-        format!("{}y", d / (86400 * 365))
+/// Commit time in the local timezone, like "28-09-2026 13:01".
+pub fn date(time: i64) -> String {
+    let t = time as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return String::new();
     }
+    format_date(&tm)
+}
+
+fn format_date(tm: &libc::tm) -> String {
+    format!(
+        "{:02}-{:02}-{:04} {:02}:{:02}",
+        tm.tm_mday,
+        tm.tm_mon + 1,
+        tm.tm_year + 1900,
+        tm.tm_hour,
+        tm.tm_min
+    )
 }
 
 #[cfg(test)]
@@ -3319,12 +3322,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn age_buckets() {
-        assert_eq!(age(100, 70), "30s");
-        assert_eq!(age(1000, 0), "16m");
-        assert_eq!(age(10_000, 0), "2h");
-        assert_eq!(age(200_000, 0), "2d");
-        assert_eq!(age(5_000_000, 0), "1mo");
-        assert_eq!(age(40_000_000, 0), "1y");
+    fn date_format() {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        tm.tm_mday = 28;
+        tm.tm_mon = 8;
+        tm.tm_year = 126;
+        tm.tm_hour = 13;
+        tm.tm_min = 1;
+        assert_eq!(format_date(&tm), "28-09-2026 13:01");
+        tm.tm_mday = 3;
+        tm.tm_mon = 0;
+        tm.tm_hour = 7;
+        tm.tm_min = 5;
+        assert_eq!(format_date(&tm), "03-01-2026 07:05");
+        // The real conversion, whatever the local timezone: same shape.
+        let d = date(1_790_000_000);
+        assert_eq!(d.len(), 16, "{d}");
+        assert_eq!((&d[2..3], &d[5..6], &d[10..11], &d[13..14]), ("-", "-", " ", ":"), "{d}");
     }
 }

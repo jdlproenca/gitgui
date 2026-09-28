@@ -13,13 +13,18 @@ use iced_widget::{column, container, row, text as text_widget, text_input, Space
 use iced_core::Renderer as _;
 
 use crate::git::graph::{EdgeKind, RowLayout};
-use crate::ui::app::{age, App, Element, Message, MenuKind, Pane, Renderer, Selection};
+use crate::ui::app::{date, App, Element, Message, MenuKind, Pane, Renderer, Selection};
 use crate::ui::widgets::{self, small_button};
 
 pub const ROW_H: f32 = 24.0;
 /// Column header row with the draggable dividers.
 const HEADER_H: f32 = 22.0;
 const DIVIDER_GRAB: f32 = 5.0;
+/// Date column width: the default fits "28-09-2026 13:01", the minimum also
+/// widens layouts saved while the column held short relative ages.
+pub const DATE_W: f32 = 116.0;
+pub const DATE_MIN_W: f32 = 100.0;
+pub const DATE_MAX_W: f32 = 200.0;
 const LANE_W: f32 = 14.0;
 const MAX_LANES: usize = 12;
 const NODE_R: f32 = 3.5;
@@ -81,7 +86,7 @@ impl Default for State {
             scroll: 0.0,
             fit: Default::default(),
             author_w: 110.0,
-            age_w: 44.0,
+            age_w: DATE_W,
             drag: None,
         }
     }
@@ -219,7 +224,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
                         let dx = p.x - start_x;
                         match which {
                             0 => state.author_w = (start_w - dx).clamp(50.0, 400.0),
-                            _ => state.age_w = (start_w - dx).clamp(36.0, 140.0),
+                            _ => state.age_w = (start_w - dx).clamp(DATE_MIN_W, DATE_MAX_W),
                         }
                         shell.capture_event();
                         shell.request_redraw();
@@ -309,10 +314,6 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
         let default_font = text::Renderer::default_font(renderer);
         let lanes = s.graph.max_lanes.clamp(1, MAX_LANES);
         let graph_w = lanes as f32 * LANE_W + 6.0;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
         let body = Rectangle::new(
             Point::new(bounds.x, bounds.y + HEADER_H),
             Size::new(bounds.width, (bounds.height - HEADER_H).max(0.0)),
@@ -409,7 +410,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
                             let author = state.fit(&c.author, aw, default_font, small);
                             draw_text(renderer, author, Point::new(ax, full.center_y()), default_font, small, t.weak, aclip, partial);
                         }
-                        let age_s = state.fit(&age(now, c.time), state.age_w - 12.0, default_font, small);
+                        let age_s = state.fit(&date(c.time), state.age_w - 12.0, default_font, small);
                         let aw = measure(&age_s, default_font, small);
                         let dclip = Rectangle::new(Point::new(cols.age_x, rect.y), Size::new(state.age_w, rect.height));
                         draw_text(

@@ -64,7 +64,7 @@ impl Default for Persisted {
             diff_context: 3,
             ignore_whitespace: false,
             author_width: 110.0,
-            age_width: 44.0,
+            age_width: crate::ui::log::DATE_W,
             changes_split: crate::ui::app::DEFAULT_CHANGES_SPLIT,
             zoom: 1.0,
         }
@@ -185,7 +185,7 @@ impl Persisted {
         app.tree_open = self.tree_open.iter().filter(|d| !d.is_empty()).cloned().collect();
         app.diff_opts.context = self.diff_context.min(100);
         app.diff_opts.ignore_whitespace = self.ignore_whitespace;
-        app.log_columns = (self.author_width.clamp(50.0, 400.0), self.age_width.clamp(36.0, 140.0));
+        app.log_columns = (self.author_width.clamp(50.0, 400.0), self.age_width.clamp(crate::ui::log::DATE_MIN_W, crate::ui::log::DATE_MAX_W));
         app.changes_split = crate::ui::app::normalize_changes_split(&self.changes_split);
         app.zoom = if self.zoom.is_finite() { self.zoom.clamp(0.5, 3.0) } else { 1.0 };
     }

@@ -969,7 +969,7 @@ mod tests {
         h.app.update(Message::PaneClose(files));
         h.app.update(Message::DiffWrap);
         h.app.update(Message::SectionToggle("Tags"));
-        h.app.update(Message::LogColumns(160.0, 60.0));
+        h.app.update(Message::LogColumns(160.0, 150.0));
         let log = h.app.pane_of(Pane::Log).unwrap();
         h.app.update(Message::PaneMaximize(log));
         assert!(h.app.state_dirty());
@@ -983,7 +983,7 @@ mod tests {
         assert_eq!(again.app.hidden_panes(), vec![Pane::Files]);
         assert!(again.app.wrap);
         assert!(again.app.sidebar_collapsed.contains("Tags"));
-        assert_eq!(again.app.log_columns, (160.0, 60.0));
+        assert_eq!(again.app.log_columns, (160.0, 150.0));
         assert_eq!(again.app.panes.maximized(), again.app.pane_of(Pane::Log));
         assert!(!again.app.state_dirty());
 
