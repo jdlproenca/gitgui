@@ -317,6 +317,11 @@ impl Repo {
     }
 
     /// Paths whose mtime signals repository or working tree changes.
+    /// True when at least one remote is configured: something to fetch from.
+    pub fn has_remotes(&self) -> bool {
+        self.repo.remotes().is_ok_and(|r| !r.is_empty())
+    }
+
     pub fn watch_paths(&self) -> Vec<PathBuf> {
         let g = self.repo.path().to_path_buf();
         vec![
@@ -597,7 +602,7 @@ impl Repo {
             walk.push(oid)?;
             pushed = true;
         }
-        for b in branches.iter().filter(|b| !b.is_remote) {
+        for b in branches {
             if walk.push(b.oid).is_ok() {
                 pushed = true;
             }

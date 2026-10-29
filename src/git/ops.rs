@@ -3,8 +3,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use git2::Oid;
 
@@ -15,6 +16,9 @@ use super::repo::{DiffOpts, DiffTarget, DiffText, FileStatus, GitError, Repo, Re
 
 pub const COMMIT_LIMIT: usize = 2000;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Background `git fetch --all --prune` while idle, so new remote branches
+/// show up in the log without pressing fetch.
+const AUTO_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// What to do with an in-progress merge, rebase, cherry-pick or revert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +379,10 @@ pub fn spawn(mut path: PathBuf, reply: impl Fn(Reply) + Send + Sync + 'static) -
                 .unwrap_or_else(|| path.clone());
             let mut limit = COMMIT_LIMIT;
             let mut diff_opts = DiffOpts::default();
+            // None fetches on the first idle poll after opening a repository.
+            let mut last_fetch: Option<Instant> = None;
+            let auto_fetching = Arc::new(AtomicBool::new(false));
+            let auto_fetched = Arc::new(AtomicBool::new(false));
             let (mut stamp, mut work_fp) = repo
                 .as_ref()
                 .map(refresh_tracking)
@@ -399,6 +407,7 @@ pub fn spawn(mut path: PathBuf, reply: impl Fn(Reply) + Send + Sync + 'static) -
                     Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Ok(Command::Open(new_path)) => {
                         path = new_path;
+                        last_fetch = None;
                         match Repo::open(&path) {
                             Ok(r) => {
                                 repo = Some(r);
@@ -540,6 +549,9 @@ pub fn spawn(mut path: PathBuf, reply: impl Fn(Reply) + Send + Sync + 'static) -
                     }
                     Ok(cmd) if cmd.is_network() && repo.is_some() => {
                         let r = repo.as_mut().expect("checked");
+                        if matches!(cmd, Command::Fetch | Command::Pull | Command::PullRebase) {
+                            last_fetch = Some(Instant::now());
+                        }
                         let label = cmd.label();
                         reply(Reply::NetStart(label));
                         let (args, envs) = cli_args(r, &cmd);
@@ -561,10 +573,16 @@ pub fn spawn(mut path: PathBuf, reply: impl Fn(Reply) + Send + Sync + 'static) -
                     Err(mpsc::RecvTimeoutError::Timeout) if repo.is_some() => {
                         let r = repo.as_mut().expect("checked");
                         let (new_stamp, new_fp) = refresh_tracking(r);
-                        if new_stamp != stamp || new_fp != work_fp {
+                        let fetched = auto_fetched.swap(false, Ordering::SeqCst);
+                        if new_stamp != stamp || new_fp != work_fp || fetched {
                             stamp = new_stamp;
                             work_fp = new_fp;
                             send_snapshot(r, limit);
+                        }
+                        let due = last_fetch.is_none_or(|t| t.elapsed() >= AUTO_FETCH_INTERVAL);
+                        if due && r.has_remotes() && !auto_fetching.swap(true, Ordering::SeqCst) {
+                            last_fetch = Some(Instant::now());
+                            spawn_auto_fetch(workdir.clone(), auto_fetching.clone(), auto_fetched.clone());
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -573,6 +591,21 @@ pub fn spawn(mut path: PathBuf, reply: impl Fn(Reply) + Send + Sync + 'static) -
         })
         .expect("spawn git worker");
     Worker { tx }
+}
+
+/// Quiet fetch on its own thread so the worker keeps serving the UI. No net
+/// log and no toast: a failure (offline, no credentials) just waits for the
+/// next round. Remote refs are not in the polled paths, so `fetched` tells
+/// the next poll to send a snapshot.
+fn spawn_auto_fetch(workdir: PathBuf, running: Arc<AtomicBool>, fetched: Arc<AtomicBool>) {
+    std::thread::Builder::new()
+        .name("auto-fetch".into())
+        .spawn(move || {
+            let ok = run_git_cli(&workdir, &["fetch", "--all", "--prune", "--quiet"], &[], &|_| {}).is_ok();
+            fetched.store(ok, Ordering::SeqCst);
+            running.store(false, Ordering::SeqCst);
+        })
+        .expect("spawn auto-fetch thread");
 }
 
 /// The AI tool and the prompt for the staged changes. Errors when no tool

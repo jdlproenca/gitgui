@@ -54,6 +54,8 @@ pub fn view(app: &App) -> Element<'_> {
             ));
         }
         header = header.push(Space::new().width(Length::Fill));
+        let fetch = (app.busy == 0).then_some(Message::Run(crate::git::ops::Command::Fetch));
+        header = header.push(small_button("fetch  f", fetch));
         header = header.push(small_button("filter  /", Some(Message::FilterOpen)));
     }
     let list: Element<'_> = CoreElement::new(LogView {
