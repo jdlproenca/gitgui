@@ -6,7 +6,7 @@ use iced_widget::{column, container, mouse_area, row, scrollable, text, Space};
 
 use crate::git::ops::{Command, StateAction};
 use crate::git::repo::RepoState;
-use crate::ui::app::{App, Element, Message};
+use crate::ui::app::{App, Element, Message, Pane};
 use crate::ui::widgets::{self, small_button};
 
 pub fn view(app: &App) -> Element<'_> {
@@ -15,7 +15,9 @@ pub fn view(app: &App) -> Element<'_> {
     let busy = app.busy > 0;
     let compact = app.window.width < 1000.0;
     let label = |full: &'static str, short: &'static str| if compact { short } else { full };
-    let mut r = row![].spacing(8).align_y(Alignment::Center).padding([4, 8]);
+    // Compact footers wrap: the info and pane buttons flow first, and the
+    // network and app buttons move to a second line when they do not fit.
+    let mut r = row![].spacing(8).align_y(Alignment::Center);
 
     r = r.push(
         row![
@@ -99,13 +101,19 @@ pub fn view(app: &App) -> Element<'_> {
     } else {
         r = r.push(text(app.repo_path.display().to_string()).size(12).font(Font::MONOSPACE).color(t.weak));
     }
-    for kind in app.hidden_panes() {
+    // Changes and Diff lead: they are the panes a narrow window misses most.
+    let mut hidden = app.hidden_panes();
+    hidden.sort_by_key(|k| !matches!(k, Pane::Changes | Pane::Detail));
+    for kind in hidden {
         r = r.push(small_button(format!("+ {}", kind.title()), Some(Message::PaneShow(kind))));
     }
-    r = r.push(Space::new().width(Length::Fill));
+    if !compact {
+        r = r.push(Space::new().width(Length::Fill));
+    }
     if app.show_debug {
         r = r.push(text(format!("{:.1} ms {} x{}", app.frame_ms, app.transport, app.scale)).size(11).color(t.weak));
     }
+    let mut actions = row![].spacing(8).align_y(Alignment::Center);
     if !app.no_repo {
         let fetch = small_button(label("Fetch  f", "Fetch"), (!busy).then_some(Message::Run(Command::Fetch)));
         let pull = mouse_area(small_button(label("Pull  p", "Pull"), (!busy).then_some(Message::Run(Command::Pull))))
@@ -118,14 +126,18 @@ pub fn view(app: &App) -> Element<'_> {
                 Command::ForcePush,
             ),
         );
-        r = r.push(fetch).push(pull).push(push);
-        r = r.push(small_button(label("Refresh  r", "Refresh"), Some(Message::Refresh)));
+        actions = actions.push(fetch).push(pull).push(push);
+        actions = actions.push(small_button(label("Refresh  r", "Refresh"), Some(Message::Refresh)));
     }
-    r = r.push(small_button(label("Change folder", "Folder"), (app.modal.is_none()).then_some(Message::OpenFolderDialog)));
-    r = r.push(small_button(label("Help  ?", "?"), Some(Message::OpenHelp)));
-    r = r.push(small_button(label("Quit  q", "Quit"), Some(Message::Quit)));
+    actions = actions.push(small_button(label("Change folder", "Folder"), (app.modal.is_none()).then_some(Message::OpenFolderDialog)));
+    actions = actions.push(small_button(label("Help  ?", "?"), Some(Message::OpenHelp)));
+    actions = actions.push(small_button(label("Quit  q", "Quit"), Some(Message::Quit)));
+    // One element, so the buttons wrap together rather than one by one.
+    r = r.push(actions);
+    let body: Element<'_> = if compact { r.wrap().vertical_spacing(4).into() } else { r.into() };
     let bg = t.panel;
-    container(r)
+    container(body)
+        .padding([4, 8])
         .width(Length::Fill)
         .style(move |_| container::Style {
             background: Some(Background::Color(bg)),
