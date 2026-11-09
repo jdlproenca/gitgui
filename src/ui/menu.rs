@@ -7,6 +7,7 @@ use iced_widget::{button, column, container, mouse_area, rule, text, Space};
 use crate::git::actions::ConflictSide;
 use crate::git::ops::Command;
 use crate::git::rebase::TodoAction;
+use crate::git::repo::{RefKind, RefLabel};
 use crate::ui::app::{App, CommitAction, Element, InputKind, Menu, MenuKind, Message, Modal};
 use crate::ui::widgets;
 
@@ -18,6 +19,26 @@ enum Item {
 
 fn entry(label: impl Into<String>, tip: &'static str, msg: Option<Message>) -> Item {
     Item::Entry(label.into(), tip, msg)
+}
+
+/// Branch names on a commit, without the remote prefix: `origin/main` next
+/// to `main` is one name, a remote-only `origin/feature` gives `feature`.
+fn branch_names(refs: &[RefLabel], remotes: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in refs {
+        let name = match r.kind {
+            RefKind::LocalBranch => r.name.as_str(),
+            RefKind::RemoteBranch => remotes
+                .iter()
+                .find_map(|rm| r.name.strip_prefix(rm.as_str()).and_then(|n| n.strip_prefix('/')))
+                .unwrap_or(&r.name),
+            RefKind::Head | RefKind::Tag => continue,
+        };
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_owned());
+        }
+    }
+    out
 }
 
 fn items(app: &App, kind: &MenuKind) -> Vec<Item> {
@@ -39,7 +60,13 @@ fn items(app: &App, kind: &MenuKind) -> Vec<Item> {
             let has_older = info.is_some_and(|i| i.has_older);
             let has_newer = info.is_some_and(|i| !i.is_head);
             let act = |a: CommitAction, enabled: bool| if enabled && !busy { Some(Message::CommitAction(idx, a)) } else { None };
-            vec![
+            let names = s.commits.get(idx).map(|c| branch_names(&c.refs, &s.remotes)).unwrap_or_default();
+            let copy_branch: Vec<Item> = match names.as_slice() {
+                [] => vec![entry("Copy branch name", "no branch here", None)],
+                [one] => vec![entry("Copy branch name", "", Some(Message::Copy(one.clone())))],
+                many => many.iter().map(|n| entry(format!("Copy branch name: {n}"), "", Some(Message::Copy(n.clone())))).collect(),
+            };
+            let mut v = vec![
                 entry("New branch here", "n", act(CommitAction::NewBranch, true)),
                 entry("Tag here", "Shift+T", act(CommitAction::Tag, true)),
                 entry("Check out (detached HEAD)", "", act(CommitAction::CheckoutDetached, true)),
@@ -59,10 +86,14 @@ fn items(app: &App, kind: &MenuKind) -> Vec<Item> {
                 entry("Create fixup commit for this", "commits the staged changes as fixup!", act(CommitAction::CreateFixup, !s.staged.is_empty())),
                 entry("Apply fixup commits above", "rebase --autosquash", act(CommitAction::Autosquash, rewrite)),
                 Item::Sep,
+            ];
+            v.extend(copy_branch);
+            v.extend([
                 entry("Copy hash", "y", Some(Message::CommitAction(idx, CommitAction::CopyHash))),
                 entry("Copy message", "", Some(Message::CommitAction(idx, CommitAction::CopyMessage))),
                 entry("Open in browser", "o", if app.web_remote().is_some() { Some(Message::CommitAction(idx, CommitAction::OpenBrowser)) } else { None }),
-            ]
+            ]);
+            v
         }
         MenuKind::Branch(name) => {
             let b = s.branches.iter().find(|b| &b.name == name);
@@ -441,4 +472,23 @@ pub fn view<'a>(app: &'a App, menu: &'a Menu) -> Element<'a> {
     .on_press(Message::MenuClose)
     .on_right_press(Message::MenuClose);
     iced_widget::stack![catch, positioned].into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_names_drop_remote_prefixes_and_duplicates() {
+        let l = |name: &str, kind| RefLabel { name: name.into(), kind };
+        let refs = vec![
+            l("main", RefKind::LocalBranch),
+            l("origin/main", RefKind::RemoteBranch),
+            l("origin/feature/x", RefKind::RemoteBranch),
+            l("v1.0", RefKind::Tag),
+            l("HEAD", RefKind::Head),
+        ];
+        assert_eq!(branch_names(&refs, &["origin".to_owned()]), vec!["main", "feature/x"]);
+        assert!(branch_names(&[l("v1.0", RefKind::Tag)], &[]).is_empty());
+    }
 }

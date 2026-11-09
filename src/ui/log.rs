@@ -13,6 +13,7 @@ use iced_widget::{column, container, row, text as text_widget, text_input, Space
 use iced_core::Renderer as _;
 
 use crate::git::graph::{EdgeKind, RowLayout};
+use crate::git::repo::{RefKind, RefLabel};
 use crate::ui::app::{date, App, Element, Message, MenuKind, Pane, Renderer, Selection};
 use crate::ui::widgets::{self, small_button};
 
@@ -26,6 +27,8 @@ pub const DATE_W: f32 = 116.0;
 pub const DATE_MIN_W: f32 = 100.0;
 pub const DATE_MAX_W: f32 = 200.0;
 const LANE_W: f32 = 14.0;
+/// Narrowest graph column: one lane.
+pub const GRAPH_MIN_W: f32 = LANE_W + 6.0;
 const MAX_LANES: usize = 12;
 const NODE_R: f32 = 3.5;
 
@@ -78,6 +81,7 @@ struct State {
     /// `log_columns` (which is where a saved layout restores them to).
     author_w: f32,
     age_w: f32,
+    graph_w: Option<f32>,
     /// (divider index, pointer x at press, width at press)
     drag: Option<(u8, f32, f32)>,
 }
@@ -89,6 +93,7 @@ impl Default for State {
             fit: Default::default(),
             author_w: 110.0,
             age_w: DATE_W,
+            graph_w: None,
             drag: None,
         }
     }
@@ -119,19 +124,22 @@ impl State {
         if self.drag.is_none() {
             self.author_w = app.log_columns.0;
             self.age_w = app.log_columns.1;
+            self.graph_w = app.log_graph_w;
         }
     }
 }
 
 impl State {
     /// Divider under `p` in the header: 0 between summary and author, 1
-    /// between author and date.
-    fn divider_at(&self, bounds: Rectangle, p: Point) -> Option<u8> {
+    /// between author and date, 2 between graph and summary.
+    fn divider_at(&self, bounds: Rectangle, p: Point, graph_w: f32) -> Option<u8> {
         if p.y < bounds.y || p.y > bounds.y + HEADER_H {
             return None;
         }
         let c = self.columns(bounds);
-        if c.show_author && (p.x - c.author_x).abs() <= DIVIDER_GRAB {
+        if (p.x - (bounds.x + graph_w)).abs() <= DIVIDER_GRAB {
+            Some(2)
+        } else if c.show_author && (p.x - c.author_x).abs() <= DIVIDER_GRAB {
             Some(0)
         } else if (p.x - c.age_x).abs() <= DIVIDER_GRAB {
             Some(1)
@@ -155,6 +163,20 @@ impl State {
 }
 
 impl LogView<'_> {
+    /// Graph column width wide enough for every lane.
+    fn graph_full_w(&self) -> f32 {
+        self.app.snapshot.graph.max_lanes.clamp(1, MAX_LANES) as f32 * LANE_W + 6.0
+    }
+
+    /// Graph column (width, lanes drawn): the dragged width, never wider
+    /// than every lane needs. Lanes past the edge are not drawn.
+    fn graph_cols(&self, state: &State) -> (f32, usize) {
+        let full = self.graph_full_w();
+        let dragged = if state.drag.is_some() { state.graph_w } else { self.app.log_graph_w };
+        let w = dragged.map_or(full, |w| w.clamp(GRAPH_MIN_W, full));
+        (w, (((w - 6.0) / LANE_W).floor() as usize).max(1))
+    }
+
     fn max_scroll(&self, height: f32) -> f32 {
         (self.rows.len() as f32 * ROW_H - (height - HEADER_H)).max(0.0)
     }
@@ -225,6 +247,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
                     if let Some(p) = cursor.position() {
                         let dx = p.x - start_x;
                         match which {
+                            2 => state.graph_w = Some((start_w + dx).clamp(GRAPH_MIN_W, self.graph_full_w())),
                             0 => state.author_w = (start_w - dx).clamp(50.0, 400.0),
                             _ => state.age_w = (start_w - dx).clamp(DATE_MIN_W, DATE_MAX_W),
                         }
@@ -234,16 +257,24 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                if state.drag.take().is_some() {
-                    shell.publish(Message::LogColumns(state.author_w, state.age_w));
+                if let Some((which, ..)) = state.drag.take() {
+                    match (which, state.graph_w) {
+                        (2, Some(w)) => shell.publish(Message::LogGraphWidth(w)),
+                        _ => shell.publish(Message::LogColumns(state.author_w, state.age_w)),
+                    }
                     shell.capture_event();
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(button)) => {
                 if let Some(abs) = cursor.position() {
                     if *button == mouse::Button::Left {
-                        if let Some(which) = state.divider_at(bounds, abs) {
-                            let w = if which == 0 { state.author_w } else { state.age_w };
+                        let graph_w = self.graph_cols(state).0;
+                        if let Some(which) = state.divider_at(bounds, abs, graph_w) {
+                            let w = match which {
+                                0 => state.author_w,
+                                1 => state.age_w,
+                                _ => graph_w,
+                            };
                             state.drag = Some((which, abs.x, w));
                             shell.capture_event();
                             return;
@@ -284,7 +315,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
             return mouse::Interaction::ResizingHorizontally;
         }
         if let Some(p) = cursor.position() {
-            if state.divider_at(bounds, p).is_some() {
+            if state.divider_at(bounds, p, self.graph_cols(state).0).is_some() {
                 return mouse::Interaction::ResizingHorizontally;
             }
         }
@@ -314,8 +345,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
         let font_size = text::Renderer::default_size(renderer);
         let small = Pixels(font_size.0 - 2.0);
         let default_font = text::Renderer::default_font(renderer);
-        let lanes = s.graph.max_lanes.clamp(1, MAX_LANES);
-        let graph_w = lanes as f32 * LANE_W + 6.0;
+        let (graph_w, lanes) = self.graph_cols(state);
         let body = Rectangle::new(
             Point::new(bounds.x, bounds.y + HEADER_H),
             Size::new(bounds.width, (bounds.height - HEADER_H).max(0.0)),
@@ -330,6 +360,7 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
             let header = Rectangle::new(bounds.position(), Size::new(bounds.width, HEADER_H));
             fill(renderer, header, t.panel, 0.0);
             let hy = header.center_y();
+            fill(renderer, Rectangle::new(Point::new(bounds.x + graph_w - 0.5, bounds.y + 4.0), Size::new(1.0, HEADER_H - 8.0)), t.border, 0.0);
             draw_text(renderer, "Commit".to_owned(), Point::new(bounds.x + graph_w + 6.0, hy), default_font, small, t.weak, header, false);
             if show_author {
                 fill(renderer, Rectangle::new(Point::new(cols.author_x - 0.5, bounds.y + 4.0), Size::new(1.0, HEADER_H - 8.0)), t.border, 0.0);
@@ -392,19 +423,46 @@ impl Widget<Message, iced_core::Theme, Renderer> for LogView<'_> {
                             draw_graph_row(&mut frame, graph_rect, layout, next, t, lanes);
                         }
                         let mut x = text_x;
-                        for r in &c.refs {
-                            let w = measure(&r.name, default_font, small) + 10.0;
+                        // The current checkout: an empty circle before the labels, bold summary.
+                        let is_head = s.head.as_ref().and_then(|h| h.oid) == Some(c.oid);
+                        if is_head {
+                            frame.stroke(
+                                &Path::circle(Point::new(x + NODE_R + 1.0, full.center_y()), NODE_R + 0.5),
+                                Stroke::default().with_color(t.accent).with_width(1.5),
+                            );
+                            x += 2.0 * NODE_R + 8.0;
+                        }
+                        for (r, remotes) in pills(&c.refs, &s.remotes) {
+                            let name_w = measure(&r.name, default_font, small);
+                            let seg_ws: Vec<f32> = remotes.iter().map(|rm| measure(rm, default_font, small) + 10.0).collect();
+                            let w = name_w + 10.0 + seg_ws.iter().sum::<f32>();
                             let pill = Rectangle::new(Point::new(x, full.center_y() - 8.0), Size::new(w, 16.0));
                             if let Some(visible) = pill.intersection(&bounds) {
                                 fill(renderer, visible, t.pill(r.kind), 4.0);
                                 draw_text(renderer, r.name.clone(), Point::new(x + 5.0, full.center_y()), default_font, small, Color::WHITE, visible, partial);
+                                // Remotes whose branch of the same name sits here too.
+                                let mut sx = x + name_w + 10.0;
+                                for (rm, sw) in remotes.iter().zip(&seg_ws) {
+                                    let sep = Rectangle::new(Point::new(sx - 0.5, pill.y + 3.0), Size::new(1.0, 10.0));
+                                    if let Some(sep) = sep.intersection(&visible) {
+                                        fill(renderer, sep, Color { a: 0.5, ..Color::WHITE }, 0.0);
+                                    }
+                                    draw_text(renderer, (*rm).to_owned(), Point::new(sx + 5.0, full.center_y()), default_font, small, Color { a: 0.85, ..Color::WHITE }, visible, partial);
+                                    sx += sw;
+                                }
                             }
                             x += w + 4.0;
                         }
                         let summary_w = (cols.author_x - x - 8.0).max(40.0);
                         let clip = Rectangle::new(Point::new(x, rect.y), Size::new(summary_w, rect.height));
                         let summary = state.fit(&c.summary, summary_w, default_font, font_size);
-                        draw_text(renderer, summary, Point::new(x, full.center_y()), default_font, font_size, t.text, clip, partial);
+                        if is_head {
+                            // The bundled font has no bold face: strike twice, a hair apart.
+                            draw_text(renderer, summary.clone(), Point::new(x + 0.6, full.center_y()), default_font, font_size, t.strong, clip, partial);
+                            draw_text(renderer, summary, Point::new(x, full.center_y()), default_font, font_size, t.strong, clip, partial);
+                        } else {
+                            draw_text(renderer, summary, Point::new(x, full.center_y()), default_font, font_size, t.text, clip, partial);
+                        }
                         if show_author {
                             let ax = cols.author_x + 6.0;
                             let aw = (cols.age_x - ax - 6.0).max(10.0);
@@ -647,5 +705,75 @@ fn draw_graph_row(
     }
 }
 
+/// Ref labels as drawn: a local branch takes along the remote names whose
+/// branch of the same name points at the same commit (`main | origin`), and
+/// those remote labels are not drawn on their own.
+fn pills<'a>(refs: &'a [RefLabel], remotes: &'a [String]) -> Vec<(&'a RefLabel, Vec<&'a str>)> {
+    let joined = |local: &RefLabel| -> Vec<&'a str> {
+        remotes
+            .iter()
+            .filter(|rm| {
+                refs.iter().any(|r| {
+                    r.kind == RefKind::RemoteBranch
+                        && r.name.strip_prefix(rm.as_str()).and_then(|n| n.strip_prefix('/')) == Some(local.name.as_str())
+                })
+            })
+            .map(String::as_str)
+            .collect()
+    };
+    let locals: Vec<(&RefLabel, Vec<&str>)> = refs
+        .iter()
+        .filter(|r| r.kind == RefKind::LocalBranch)
+        .map(|r| (r, joined(r)))
+        .collect();
+    let absorbed = |r: &RefLabel| {
+        r.kind == RefKind::RemoteBranch
+            && locals
+                .iter()
+                .any(|(l, rms)| rms.iter().any(|rm| r.name.strip_prefix(rm).and_then(|n| n.strip_prefix('/')) == Some(l.name.as_str())))
+    };
+    refs.iter()
+        .filter(|r| !absorbed(r))
+        .map(|r| match locals.iter().find(|(l, _)| std::ptr::eq(*l, r)) {
+            Some((_, rms)) => (r, rms.clone()),
+            None => (r, Vec::new()),
+        })
+        .collect()
+}
+
 #[allow(dead_code)]
 fn unused(_: event::Status) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label(name: &str, kind: RefKind) -> RefLabel {
+        RefLabel { name: name.into(), kind }
+    }
+
+    #[test]
+    fn local_branch_absorbs_same_named_remote_branches() {
+        let refs = vec![
+            label("main", RefKind::LocalBranch),
+            label("origin/main", RefKind::RemoteBranch),
+            label("upstream/main", RefKind::RemoteBranch),
+            label("origin/other", RefKind::RemoteBranch),
+            label("v1", RefKind::Tag),
+        ];
+        let remotes = vec!["origin".to_owned(), "upstream".to_owned()];
+        let got: Vec<(&str, Vec<&str>)> = pills(&refs, &remotes).into_iter().map(|(r, rms)| (r.name.as_str(), rms)).collect();
+        assert_eq!(
+            got,
+            vec![("main", vec!["origin", "upstream"]), ("origin/other", vec![]), ("v1", vec![])]
+        );
+    }
+
+    #[test]
+    fn remote_branch_alone_stays_its_own_label() {
+        let refs = vec![label("feature", RefKind::LocalBranch), label("origin/main", RefKind::RemoteBranch)];
+        let remotes = vec!["origin".to_owned()];
+        let got: Vec<(&str, usize)> = pills(&refs, &remotes).into_iter().map(|(r, rms)| (r.name.as_str(), rms.len())).collect();
+        assert_eq!(got, vec![("feature", 0), ("origin/main", 0)]);
+    }
+}

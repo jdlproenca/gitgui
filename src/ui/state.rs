@@ -45,6 +45,8 @@ pub struct Persisted {
     pub ignore_whitespace: bool,
     pub author_width: f32,
     pub age_width: f32,
+    /// Graph column width; None fits every lane.
+    pub graph_width: Option<f32>,
     /// Unstaged, staged and commit box shares of the changes pane.
     pub changes_split: [f32; 3],
     pub zoom: f32,
@@ -65,6 +67,7 @@ impl Default for Persisted {
             ignore_whitespace: false,
             author_width: 110.0,
             age_width: crate::ui::log::DATE_W,
+            graph_width: None,
             changes_split: crate::ui::app::DEFAULT_CHANGES_SPLIT,
             zoom: 1.0,
         }
@@ -160,6 +163,7 @@ impl Persisted {
             ignore_whitespace: app.diff_opts.ignore_whitespace,
             author_width: app.log_columns.0,
             age_width: app.log_columns.1,
+            graph_width: app.log_graph_w,
             changes_split: app.changes_split,
             zoom: app.zoom,
         }
@@ -186,6 +190,7 @@ impl Persisted {
         app.diff_opts.context = self.diff_context.min(100);
         app.diff_opts.ignore_whitespace = self.ignore_whitespace;
         app.log_columns = (self.author_width.clamp(50.0, 400.0), self.age_width.clamp(crate::ui::log::DATE_MIN_W, crate::ui::log::DATE_MAX_W));
+        app.log_graph_w = self.graph_width.filter(|w| w.is_finite()).map(|w| w.max(crate::ui::log::GRAPH_MIN_W));
         app.changes_split = crate::ui::app::normalize_changes_split(&self.changes_split);
         app.zoom = if self.zoom.is_finite() { self.zoom.clamp(0.5, 3.0) } else { 1.0 };
     }

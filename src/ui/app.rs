@@ -455,6 +455,8 @@ pub enum Message {
     DiffWhitespace,
     /// Commit list column widths after a header drag: (author, date).
     LogColumns(f32, f32),
+    /// Commit list graph column width after a header drag.
+    LogGraphWidth(f32),
     /// Heights of the unstaged, staged and commit sections of the changes
     /// pane as fractions, after a drag of one of the bars between them.
     ChangesSplit([f32; 3]),
@@ -632,6 +634,8 @@ pub struct App {
     pub editor_full: bool,
     /// Commit list column widths (author, date), dragged from the header.
     pub log_columns: (f32, f32),
+    /// Graph column width dragged from the header; None fits every lane.
+    pub log_graph_w: Option<f32>,
     /// Fractions of the changes pane taken by the unstaged list, the staged
     /// list and the commit box, dragged from the bars between them.
     pub changes_split: [f32; 3],
@@ -765,6 +769,7 @@ impl App {
             editor_panes,
             editor_full: false,
             log_columns: (110.0, log::DATE_W),
+            log_graph_w: None,
             changes_split: DEFAULT_CHANGES_SPLIT,
             zoom: 1.0,
             last_result: None,
@@ -2447,6 +2452,7 @@ impl App {
             Message::DiffNext(dir) => self.diff_next_match(dir),
             Message::DiffContext(d) => self.change_diff_context(d),
             Message::LogColumns(author, age) => self.log_columns = (author, age),
+            Message::LogGraphWidth(w) => self.log_graph_w = Some(w),
             Message::ChangesSplit(r) => self.changes_split = normalize_changes_split(&r),
             Message::OpenFolderDialog => self.open_folder_dialog(),
             Message::OpenFolderEnter(name) => {
